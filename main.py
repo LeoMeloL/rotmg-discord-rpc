@@ -34,6 +34,8 @@ DEFAULT_CONFIG = {
     "show_boss_hp": True,
     # Discord appends "(N of MAX)" to the area line.
     "show_player_count": True,
+    # Dungeon difficulty as 🪦 in the area image tooltip.
+    "show_difficulty": True,
     "boss_min_hp": 5000,
     "boss_radius": 15,
     "interfaces": [],
@@ -69,6 +71,14 @@ def _clip(text: str) -> str:
     return text if len(text) >= 2 else text + "  "
 
 
+def difficulty_tombstones(difficulty: float) -> str:
+    """3.5 -> "🪦🪦🪦½"; areas without difficulty (Nexus, Vault, Realm) send -1 -> ""."""
+    if difficulty <= 0:
+        return ""
+    whole = int(difficulty)
+    return "🪦" * whole + ("½" if difficulty - whole >= 0.5 else "")
+
+
 class Icons:
     """Maps classes/bosses/areas to public icon URLs via icons/manifest.json."""
 
@@ -101,7 +111,9 @@ def build_activity(s: Snapshot, cfg: dict, traffic_seen: bool, icons: Icons) -> 
     area_image = icons.url("areas", area, s.map_name) or default_image
     if area_image:
         assets["large_image"] = area_image
-    assets["large_text"] = _clip(area)
+    # Tooltips are plain text, so the game's tombstone becomes the 🪦 emoji.
+    tombs = difficulty_tombstones(s.difficulty) if cfg["show_difficulty"] else ""
+    assets["large_text"] = _clip(f"{area} {tombs}" if tombs else area)
     if not s.class_name:  # map just loaded, character not decoded yet
         return {"details": _clip(area), "assets": assets}
     cls = s.class_name

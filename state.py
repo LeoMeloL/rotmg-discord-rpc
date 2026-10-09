@@ -49,6 +49,7 @@ class Snapshot:
     class_type: int = 0
     players: int = 0
     max_players: int = 0
+    difficulty: float = -1.0
     area_since: float = 0.0
 
 
@@ -75,6 +76,7 @@ class GameState:
         # The server sends every player in the map (not just nearby ones).
         self.players: set[int] = set()
         self.max_players = 0
+        self.difficulty = -1.0
         self.closed_at = 0.0
         self.last_boss = ("", -1, 0)
         self.last_boss_seen = 0.0
@@ -137,6 +139,7 @@ class GameState:
         self.enemies.clear()
         self.players.clear()
         self.max_players = m["max_players"]
+        self.difficulty = m["difficulty"]
         self.speakers.clear()
         self.solo_bosses.clear()
         self._end_encounter()
@@ -310,6 +313,7 @@ class GameState:
                 class_type=self.class_type,
                 players=len(self.players),
                 max_players=self.max_players,
+                difficulty=self.difficulty,
                 area_since=self.area_since,
             )
 

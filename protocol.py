@@ -136,11 +136,11 @@ def parse_mapinfo(body: bytes) -> dict:
     display_name = r.string()
     realm_name = r.string()
     r.i32(); r.i32()      # fp, background
-    r.f32()               # difficulty
+    difficulty = r.f32()  # dungeon tombstones (3.5 = three and a half); -1 = none
     r.u8(); r.u8(); r.u8()  # allowPlayerTeleport, noSave, showDisplays
     max_players = r.i16()
     return {"width": width, "height": height, "name": name, "display_name": display_name,
-            "realm_name": realm_name, "max_players": max_players}
+            "realm_name": realm_name, "difficulty": difficulty, "max_players": max_players}
 
 
 def parse_update(body: bytes) -> tuple[list, list[int]]:
