@@ -41,6 +41,8 @@ class Snapshot:
     boss_hp_pct: int = -1
     boss_type: int = 0
     class_type: int = 0
+    players: int = 0
+    max_players: int = 0
     area_since: float = 0.0
 
 
@@ -64,6 +66,9 @@ class GameState:
         self.quest_oid = -1
         # oid -> [objectType, x, y, hp, maxHp]
         self.enemies: dict[int, list] = {}
+        # The server sends every player in the map (not just nearby ones).
+        self.players: set[int] = set()
+        self.max_players = 0
         self.closed_at = 0.0
         self.last_boss = ("", -1, 0)
         self.last_boss_seen = 0.0
@@ -109,6 +114,8 @@ class GameState:
         self.my_oid = -1
         self.quest_oid = -1
         self.enemies.clear()
+        self.players.clear()
+        self.max_players = m["max_players"]
         log.info("Area: %s (name=%r display=%r realm=%r)", self.area, m["name"],
                  m["display_name"], m["realm_name"])
 
@@ -122,6 +129,8 @@ class GameState:
 
     def _on_update(self, new_objs, drops):
         for obj_type, oid, x, y, stats in new_objs:
+            if obj_type in self.gd.classes:
+                self.players.add(oid)
             if oid == self.my_oid:
                 if obj_type != self.class_type:
                     log.info("Class: %s (%d)", self.gd.class_name(obj_type) or "?", obj_type)
@@ -135,6 +144,7 @@ class GameState:
                                      int(stats.get(P.STAT_MAX_HP, 0) or 0)]
         for oid in drops:
             self.enemies.pop(oid, None)
+            self.players.discard(oid)
 
     def _on_newtick(self, statuses):
         for oid, x, y, stats in statuses:
@@ -196,6 +206,8 @@ class GameState:
                 boss_hp_pct=pct,
                 boss_type=boss_type,
                 class_type=self.class_type,
+                players=len(self.players),
+                max_players=self.max_players,
                 area_since=self.area_since,
             )
 
@@ -204,4 +216,4 @@ class GameState:
             return (f"pkts={self.packets_seen} area={self.area!r} realm={self.realm!r} oid={self.my_oid} "
                     f"class={self.gd.class_name(self.class_type)!r} lvl={self.level} "
                     f"fame57={self.fame} fame39={self.account_fame} pos=({self.pos[0]:.1f},{self.pos[1]:.1f}) "
-                    f"enemies={len(self.enemies)} quest={self.quest_oid} boss={self._current_boss()}")
+                    f"players={len(self.players)}/{self.max_players} enemies={len(self.enemies)} quest={self.quest_oid} boss={self._current_boss()}")

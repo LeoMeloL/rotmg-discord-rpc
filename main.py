@@ -32,6 +32,8 @@ DEFAULT_CONFIG = {
     "large_image": "",
     "use_class_images": True,
     "show_boss_hp": True,
+    # Discord appends "(N of MAX)" to the area line.
+    "show_player_count": True,
     "boss_min_hp": 5000,
     "boss_radius": 15,
     "interfaces": [],
@@ -121,9 +123,17 @@ def build_activity(s: Snapshot, cfg: dict, traffic_seen: bool, icons: Icons) -> 
         assets["small_text"] = _clip(f"{cls} • Lv {s.level}" if s.level else cls)
 
     activity = {"details": _clip(details), "state": _clip(state), "assets": assets}
+    if cfg["show_player_count"] and s.max_players > 0 and s.players > 0:
+        activity["party"] = {"id": f"rotmg-{s.map_name}", "size": [min(s.players, s.max_players), s.max_players]}
     if s.area_since:
         activity["timestamps"] = {"start": int(s.area_since)}
     return activity
+
+
+def _without_party(activity: dict | None) -> dict | None:
+    if activity is None:
+        return None
+    return {k: v for k, v in activity.items() if k != "party"}
 
 
 def run(cfg: dict, debug: bool):
@@ -171,7 +181,9 @@ def run(cfg: dict, debug: bool):
                     ipc.set_activity(None)
 
         # Discord allows ~5 updates / 20 s; push only on change, at most every 5 s.
-        if ipc.connected and activity != last_activity and now - last_push >= 5:
+        # Player counts churn constantly (Nexus), so a count-only change waits 15 s.
+        min_gap = 15 if _without_party(activity) == _without_party(last_activity) else 5
+        if ipc.connected and activity != last_activity and now - last_push >= min_gap:
             if ipc.set_activity(activity):
                 last_activity, last_push = activity, now
                 log.info("Presence: %s", "cleared" if activity is None else
