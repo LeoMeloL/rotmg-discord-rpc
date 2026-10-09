@@ -88,6 +88,7 @@ class GameState:
         self.encounter_types: list[int] = []
         self.phase = ""
         self.intensity = ""
+        self.solo_bosses: list[tuple[str, int]] = []  # (name, type) in the order they were fought
 
     # ---- packet handlers (sniffer thread) ----
 
@@ -137,6 +138,7 @@ class GameState:
         self.players.clear()
         self.max_players = m["max_players"]
         self.speakers.clear()
+        self.solo_bosses.clear()
         self._end_encounter()
         self.last_boss = ("", -1, 0)  # don't carry the previous map's boss over
         log.info("Area: %s (name=%r display=%r realm=%r)", self.area, m["name"],
@@ -188,6 +190,9 @@ class GameState:
     # no HP bars, no quest target; each boss speaks, then phase banners follow.
     # Every other dungeon uses the regular quest-boss detection.
     ENCOUNTER_MAPS = {"Moonlight Village"}
+    # Finales get a short label: the 3-boss dance is named after the last solo
+    # boss ("Miko Finale"), Umi's last phase is always this banner ("Umi Finale").
+    UMI_FINALE_PHASE = "Fireworks on a Starless Night"
     SPEECH_BURST_MS = 1500   # bosses that speak together (same line) share the encounter
     SPEECH_MAX_AGE_MS = 120_000
 
@@ -229,11 +234,14 @@ class GameState:
             infos = [self._big_enemy(o) for o in oids]
             self.encounter_names = [i[0] for i in infos]
             self.encounter_types = [i[1] for i in infos]
+            if len(infos) == 1 and (not self.solo_bosses or self.solo_bosses[-1] != infos[0]):
+                self.solo_bosses.append(infos[0])
         self.phase = phase
         self.intensity = ""
         log.info("Phase: %s (%s)", phase, ", ".join(self.encounter_names) or "boss unknown")
 
     def _end_encounter(self):
+        """Clears the active encounter (solo_bosses is kept: the finale needs it)."""
         self.encounter_oids, self.encounter_names, self.encounter_types = [], [], []
         self.phase = ""
         self.intensity = ""
@@ -274,6 +282,15 @@ class GameState:
                 if self.encounter_names:
                     # These bosses have no HP bar, so no HP % either.
                     boss, boss_type, pct = _join_names(self.encounter_names), self.encounter_types[0], -1
+                    finale_of = None
+                    if len(self.encounter_names) > 1 and self.solo_bosses:
+                        finale_of = self.solo_bosses[-1]
+                    elif self.phase == self.UMI_FINALE_PHASE:
+                        finale_of = (self.encounter_names[0], self.encounter_types[0])
+                    if finale_of:
+                        # "Dancer Miko" -> "Miko Finale"; the intensity replaces the phase name
+                        boss, boss_type = f"{finale_of[0].split()[-1]} Finale", finale_of[1]
+                        phase = self.intensity
             elif boss:
                 self.last_boss, self.last_boss_seen = (boss, pct, boss_type), now
             elif self.last_boss[0] and now - self.last_boss_seen < 5 and self.flow is not None:
