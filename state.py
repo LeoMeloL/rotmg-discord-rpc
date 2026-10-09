@@ -28,6 +28,11 @@ def area_name(name: str, display_name: str) -> str:
     return MAP_ALIASES.get(raw.lower(), raw)
 
 
+def _join_names(names: list[str]) -> str:
+    """["A"] -> "A"; ["A", "B", "C"] -> "A, B & C"."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " & " + names[-1]
+
+
 @dataclass
 class Snapshot:
     in_game: bool
@@ -40,6 +45,7 @@ class Snapshot:
     boss: str = ""
     boss_hp_pct: int = -1
     boss_type: int = 0
+    phase: str = ""     # encounter phase banner, e.g. "Fireworks Display (Climax)"
     class_type: int = 0
     players: int = 0
     max_players: int = 0
@@ -73,6 +79,15 @@ class GameState:
         self.last_boss = ("", -1, 0)
         self.last_boss_seen = 0.0
         self.packets_seen = 0
+        # Scripted encounters (e.g. Moonlight Village): bosses announce themselves
+        # in chat, then the server shows phase banners. Timed with the server clock.
+        self.server_ms = 0
+        self.speakers: list[tuple[int, int]] = []  # (server_ms, oid) of big enemies that spoke
+        self.encounter_oids: list[int] = []
+        self.encounter_names: list[str] = []
+        self.encounter_types: list[int] = []
+        self.phase = ""
+        self.intensity = ""
 
     # ---- packet handlers (sniffer thread) ----
 
@@ -93,9 +108,14 @@ class GameState:
             elif name == "UPDATE":
                 self._on_update(*P.parse_update(body))
             elif name == "NEWTICK":
-                self._on_newtick(P.parse_newtick(body))
+                self.server_ms, statuses = P.parse_newtick(body)
+                self._on_newtick(statuses)
             elif name == "QUESTOBJECTID":
                 self.quest_oid = P.parse_int32(body)
+            elif name == "TEXT" and self.map_name in self.ENCOUNTER_MAPS:
+                self._on_text(*P.parse_text(body))
+            elif name == "NOTIFICATION" and self.map_name in self.ENCOUNTER_MAPS:
+                self._on_notification(*P.parse_notification(body))
 
     def on_flow_closed(self, flow):
         with self.lock:
@@ -116,6 +136,9 @@ class GameState:
         self.enemies.clear()
         self.players.clear()
         self.max_players = m["max_players"]
+        self.speakers.clear()
+        self._end_encounter()
+        self.last_boss = ("", -1, 0)  # don't carry the previous map's boss over
         log.info("Area: %s (name=%r display=%r realm=%r)", self.area, m["name"],
                  m["display_name"], m["realm_name"])
 
@@ -161,6 +184,61 @@ class GameState:
             if P.STAT_MAX_HP in stats:
                 e[4] = int(stats[P.STAT_MAX_HP])
 
+    # Moonlight Village is the only dungeon whose bosses work as a scripted show:
+    # no HP bars, no quest target; each boss speaks, then phase banners follow.
+    # Every other dungeon uses the regular quest-boss detection.
+    ENCOUNTER_MAPS = {"Moonlight Village"}
+    SPEECH_BURST_MS = 1500   # bosses that speak together (same line) share the encounter
+    SPEECH_MAX_AGE_MS = 120_000
+
+    def _big_enemy(self, oid: int) -> tuple[str, int] | None:
+        """(name, objectType) if oid is a tracked enemy with boss-level HP."""
+        e = self.enemies.get(oid)
+        if e is None:
+            return None
+        name, xml_hp, _ = self.gd.enemy(e[0])
+        if max(xml_hp, e[4]) < self.boss_min_hp:
+            return None
+        return name, e[0]
+
+    def _on_text(self, sender: str, oid: int, text: str):
+        if sender.startswith("#") and self._big_enemy(oid):
+            self.speakers.append((self.server_ms, oid))
+            del self.speakers[:-20]
+
+    def _on_notification(self, kind: int, text: str):
+        if kind == P.NOTIF_PHASE and text:
+            self._start_phase(text)
+        elif kind == P.NOTIF_INTENSITY and text and self.phase:
+            self.intensity = text
+            log.info("Phase intensity: %s", text)
+        elif kind == P.NOTIF_ENCOUNTER_END and self.phase:
+            log.info("Encounter finished")
+            self._end_encounter()
+
+    def _start_phase(self, phase: str):
+        recent = [(t, oid) for t, oid in self.speakers
+                  if self.server_ms - t <= self.SPEECH_MAX_AGE_MS and self._big_enemy(oid)]
+        if recent:
+            last = max(t for t, _ in recent)
+            oids: list[int] = []
+            for t, oid in recent:
+                if last - t <= self.SPEECH_BURST_MS and oid not in oids:
+                    oids.append(oid)
+            self.encounter_oids = oids
+            infos = [self._big_enemy(o) for o in oids]
+            self.encounter_names = [i[0] for i in infos]
+            self.encounter_types = [i[1] for i in infos]
+        self.phase = phase
+        self.intensity = ""
+        log.info("Phase: %s (%s)", phase, ", ".join(self.encounter_names) or "boss unknown")
+
+    def _end_encounter(self):
+        self.encounter_oids, self.encounter_names, self.encounter_types = [], [], []
+        self.phase = ""
+        self.intensity = ""
+        self.last_boss = ("", -1, 0)
+
     # ---- queries (presence thread) ----
 
     def _current_boss(self) -> tuple[str, int, int]:
@@ -190,7 +268,13 @@ class GameState:
                 return Snapshot(in_game=False)
             boss, pct, boss_type = self._current_boss()
             now = time.time()
-            if boss:
+            phase = ""
+            if self.phase:  # scripted encounter takes precedence over proximity
+                phase = f"{self.phase} ({self.intensity})" if self.intensity else self.phase
+                if self.encounter_names:
+                    # These bosses have no HP bar, so no HP % either.
+                    boss, boss_type, pct = _join_names(self.encounter_names), self.encounter_types[0], -1
+            elif boss:
                 self.last_boss, self.last_boss_seen = (boss, pct, boss_type), now
             elif self.last_boss[0] and now - self.last_boss_seen < 5 and self.flow is not None:
                 boss, pct, boss_type = self.last_boss  # smooth over brief out-of-range moments
@@ -205,6 +289,7 @@ class GameState:
                 boss=boss,
                 boss_hp_pct=pct,
                 boss_type=boss_type,
+                phase=phase,
                 class_type=self.class_type,
                 players=len(self.players),
                 max_players=self.max_players,

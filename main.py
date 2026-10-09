@@ -108,12 +108,16 @@ def build_activity(s: Snapshot, cfg: dict, traffic_seen: bool, icons: Icons) -> 
 
     details = f"{cls} • {s.fame:,} Fame"
     if s.boss:
-        hp = f" ({s.boss_hp_pct}%)" if cfg["show_boss_hp"] and s.boss_hp_pct >= 0 else ""
-        state = f"⚔ {s.boss}{hp} • {area}"
+        # 0% while alive = invulnerable/scripted phase without an HP bar: hide it.
+        hp = f" ({s.boss_hp_pct}%)" if cfg["show_boss_hp"] and s.boss_hp_pct > 0 else ""
+        # During a scripted encounter the phase name replaces the area (still in the image tooltip).
+        state = f"⚔ {s.boss}{hp} • {s.phase or area}"
         boss_image = icons.url("bosses", s.boss_type)
         if boss_image:
             assets["large_image"] = boss_image
             assets["large_text"] = _clip(f"{s.boss} • {area}")
+    elif s.phase:
+        state = f"⚔ {s.phase} • {area}"
     else:
         state = area
 

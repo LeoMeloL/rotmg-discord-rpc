@@ -22,7 +22,9 @@ PACKET_IDS = {
     "FAILURE": 0,
     "NEWTICK": 10,
     "UPDATE": 42,
+    "TEXT": 44,
     "DEATH": 46,
+    "NOTIFICATION": 67,
     "QUESTOBJECTID": 82,
     "MAPINFO": 92,
     "CREATESUCCESS": 101,
@@ -165,9 +167,11 @@ def parse_update(body: bytes) -> tuple[list, list[int]]:
     return new_objs, drops
 
 
-def parse_newtick(body: bytes) -> list:
+def parse_newtick(body: bytes) -> tuple[int, list]:
+    """Returns (serverRealTimeMs, statuses)."""
     r = Reader(body)
     r.i32(); r.i32()  # tickId, tickTime
+    server_ms = struct.unpack_from(">I", body, r.pos)[0]
     r.pos += 4 + 2    # serverRealTimeMs (u32), serverLastRttMs (u16)
     statuses = []
     try:
@@ -175,7 +179,36 @@ def parse_newtick(body: bytes) -> list:
             statuses.append(read_status(r))
     except (ValueError, struct.error) as e:
         log.warning("NEWTICK partially decoded (%d statuses): %s", len(statuses), e)
-    return statuses
+    return server_ms, statuses
+
+
+def parse_text(body: bytes) -> tuple[str, int, str]:
+    """TEXT (chat / speech bubble): (sender name, sender objectId, text).
+
+    Enemies and NPCs speak with a '#' prefixed name.
+    """
+    r = Reader(body)
+    name = r.string()
+    oid = r.i32()
+    r.i16()      # numStars
+    r.u8()       # bubbleTime
+    r.string()   # recipient
+    return name, oid, r.string()
+
+
+# NOTIFICATION types seen in boss encounters (game build 7.1):
+NOTIF_PHASE = 11      # banner with the phase name ("Fireworks Display")
+NOTIF_INTENSITY = 12  # sub-phase intensity ("Gentle" ... "Climax")
+NOTIF_ENCOUNTER_END = 14
+
+
+def parse_notification(body: bytes) -> tuple[int, str]:
+    """(type, text); bit 0x02 of the flags byte means a text string follows."""
+    kind, flags = body[0], body[1]
+    text = ""
+    if flags & 0x02 and len(body) >= 4:
+        text = Reader(body[2:]).string()
+    return kind, text
 
 
 def parse_int32(body: bytes) -> int:

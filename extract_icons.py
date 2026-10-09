@@ -25,6 +25,8 @@ import gamedata
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(HERE, "icons")
 ICON_SIZE = 256
+# Non-quest enemies this tough can still be encounter bosses (e.g. Moonlight Village).
+BOSS_ICON_MIN_HP = 5000
 
 GAME_DATA_CANDIDATES = [
     os.path.expandvars(r"%LOCALAPPDATA%\RealmOfTheMadGod\Production\RotMG Exalt_Data"),
@@ -189,7 +191,9 @@ def main():
         if tex and obj_type >= 0:
             if cls == "Player":
                 jobs.append(("classes", str(obj_type), f"class/{obj_type}.png", tex))
-            elif el.find("Enemy") is not None and el.find("Quest") is not None:
+            elif el.find("Enemy") is not None and (
+                    el.find("Quest") is not None
+                    or gamedata._int(el.findtext("MaxHitPoints")) >= BOSS_ICON_MIN_HP):
                 jobs.append(("bosses", str(obj_type), f"boss/{obj_type}.png", tex))
             elif cls == "Portal":
                 portals_by_id[obj_id] = tex
